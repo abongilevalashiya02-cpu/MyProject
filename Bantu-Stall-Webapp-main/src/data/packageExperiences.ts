@@ -1,0 +1,68 @@
+
+import { ExperienceType } from '@/types/marketplace';
+
+export const packageExperiences: ExperienceType[] = [
+  {
+    id: 101,
+    title: "Speaker Engagement Package",
+    description: "A premium all-inclusive package for speakers attending the Global event at Victoria Falls, Zimbabwe.",
+    location: "Victoria Falls, Zimbabwe",
+    price: 5000,
+    category: "Opportunity",
+    image: "/lovable-uploads/e0847a83-9ac2-452e-ad44-d35674824323.png",
+    rating: 4.9,
+    reviewCount: 42,
+    duration: "August 12-17, 2025",
+    isLimitedEdition: true,
+    spotsLeft: 9,
+    hostType: "Event Organizer",
+    luxury: 5,
+    budget: 3,
+    eco: 4,
+    cultural: 5,
+    comfort: 5,
+    tags: ["Speaker", "Workshop", "Safari", "Cultural"]
+  },
+  {
+    id: 102,
+    title: "Adventure Excursion Package",
+    description: "An adventure-filled all-inclusive package at Victoria Falls with wildlife encounters and cultural experiences.",
+    location: "Victoria Falls, Zimbabwe",
+    price: 4400,
+    category: "Business",
+    image: "/lovable-uploads/ae6c97c8-d66e-4379-83ab-5118189656cd.png",
+    rating: 4.9,
+    reviewCount: 42,
+    duration: "August 12-17, 2025",
+    isLimitedEdition: true,
+    spotsLeft: 15,
+    hostType: "Tour Guide",
+    luxury: 5,
+    budget: 3,
+    eco: 4,
+    cultural: 5,
+    comfort: 5,
+    tags: ["Adventure", "Safari", "Wildlife", "Cultural"]
+  },
+  {
+    id: 103,
+    title: "TEDxGraystonDrive 2025 Speaker Package",
+    description: "Step onto the TEDx stage and amplify your voice at this exclusive 6-day speaker experience in Africa's financial capital.",
+    location: "Sandton, Johannesburg, South Africa",
+    price: 4500,
+    category: "Opportunity",
+    image: "/lovable-uploads/c7cbebca-0fa4-4298-b766-41851219592b.png",
+    rating: 4.8,
+    reviewCount: 28,
+    duration: "June 3-8, 2025",
+    isLimitedEdition: true,
+    spotsLeft: 12,
+    hostType: "Event Organizer",
+    luxury: 4,
+    budget: 3,
+    eco: 3,
+    cultural: 5,
+    comfort: 4,
+    tags: ["TEDx", "Speaker", "Workshop", "Safari", "Networking"]
+  }
+];
