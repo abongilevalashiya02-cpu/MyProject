@@ -86,3 +86,6 @@ verify_jwt = false
 
 [functions.backup-service]
 verify_jwt = false
+
+[functions.market-prices]
+verify_jwt = true

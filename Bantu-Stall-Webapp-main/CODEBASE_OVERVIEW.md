@@ -73,6 +73,7 @@ All functions live under `supabase/functions/<name>/index.ts`. Key functions and
 - `quotation-approval`: Authenticated approval actions; writes `quotation_approvals`, updates `quotation_requests`, creates `user_notifications`, and logs `audit_logs`.
 - `quotation-notification`: For both ad-hoc quote requests (generates PDF via jsPDF and emails) and existing quotations; emails client and admin via Brevo.
 - `quotation-pdf`: Authenticated PDF generation for `quotation_requests` with audit log.
+- `market-prices`: Authenticated REST endpoint to fetch FX market prices for one or more currency pairs, with latest and historical data (Alpha Vantage if API key present, otherwise exchangerate.host fallback). Query params: `pairs`, `base`+`quote`, `granularity`, `interval`, `start`, `end`, `days`, `limit`, `include`, `provider`.
 - `security-monitor`: Logs `security_events`; may block IPs in `blocked_ips` on repeated high-severity events.
 - `send-welcome-email`: Sends welcome email via Resend using `RESEND_API_KEY`.
 - `system-monitor`: Returns metrics/health checks/alerts and logs system metrics in `security_events`.
