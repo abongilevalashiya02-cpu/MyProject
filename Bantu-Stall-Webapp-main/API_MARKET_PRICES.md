@@ -2,6 +2,8 @@
 
 A RESTful endpoint that estimates market prices for Bantu Stall's experiential travel and education packages, with historical trends derived from quotation activity. Implemented as a Supabase Edge Function `market-prices` (JWT-required).
 
+Important: It does not return FX rates for currency pairs anymore. The redesigned market-prices endpoint is domain-specific (packages). If you still need currency-pair FX rates, we can add a separate REST endpoint (e.g., `fx-rates`) alongside this one for the real-time quotations flow.
+
 ### Base URL
 - Supabase Functions: `https://<SUPABASE_PROJECT>.supabase.co/functions/v1/market-prices`
 - Local (Supabase CLI): `http://localhost:54321/functions/v1/market-prices`
