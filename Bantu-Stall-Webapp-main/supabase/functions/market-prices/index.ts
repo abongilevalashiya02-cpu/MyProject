@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.2";
 
 // CORS for browser and server usage
 const corsHeaders: Record<string, string> = {
@@ -6,24 +7,47 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// ---- Types ----
-interface MarketPricesQuery {
-  pairs?: string; // e.g. "USDZAR,EURUSD" or with separators "USD/ZAR,EUR-USD"
-  base?: string;  // optional alternative to pairs, can be comma-separated
-  quote?: string; // optional alternative to pairs, can be comma-separated
-  granularity?: "real_time" | "daily" | "intraday";
-  interval?: "5min" | "15min" | "60min"; // intraday only
-  start?: string; // ISO date e.g. 2025-01-01
-  end?: string;   // ISO date e.g. 2025-01-31
-  days?: string;  // integer fallback for historical window
-  limit?: string; // integer to limit returned points
-  include?: "latest" | "history" | "both";
-  provider?: "alpha" | "exchangerate"; // choose data source
+// ------------------ Domain model (Experiential Travel/Education) ------------------
+// Predefined package "recipes" mapping to catalog categories
+const PACKAGE_RECIPES: Record<string, { categories: string[] }> = {
+  corporate_retreat: {
+    categories: ["accommodation", "meals", "activities", "facilitation", "transport", "venue_hire"],
+  },
+  education_retreat: {
+    categories: ["accommodation", "meals", "workshops", "activities", "transport"],
+  },
+  speaker_experience: {
+    categories: ["venue_hire", "av_production", "catering", "facilitation", "transport"],
+  },
+  tedx_experience: {
+    categories: ["venue_hire", "catering", "av_production", "facilitation"],
+  },
+};
+
+// ------------------ Query types ------------------
+interface PackageQuery {
+  packages?: string; // comma-separated package slugs (e.g. corporate_retreat,education_retreat)
+  categories?: string; // comma-separated explicit categories (overrides recipe)
+  group_size?: string; // integer, default 25
+  nights?: string;     // integer, default 3
+  occupancy?: string;  // integer, default 2 (people per room)
+  meals_per_day?: string; // integer, default 2
+  hours_per_day?: string; // integer, default 8 for facilitation
+  currency?: string;   // target currency, default ZAR
+  include?: "latest" | "history" | "both"; // default both
+  start?: string; // history start date YYYY-MM-DD
+  end?: string;   // history end date YYYY-MM-DD
+  days?: string;  // fallback history window (default 90)
 }
 
-interface CurrencyPair { base: string; quote: string; key: string; }
+interface CatalogRow {
+  service_category: string;
+  avg_price: number;
+  pricing_model: "hourly" | "daily" | "per_person" | "per_event" | "fixed" | string;
+  currency: string | null;
+}
 
-// ---- Utilities ----
+// ------------------ Helpers ------------------
 function httpJson(body: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(body), {
     headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -35,163 +59,153 @@ function badRequest(message: string) {
   return httpJson({ error: message }, { status: 400 });
 }
 
-function providerError(message: string, status = 502) {
-  return httpJson({ error: message }, { status });
-}
-
-function normalizePairToken(token: string): CurrencyPair | null {
-  const cleaned = token.trim().replace(/[^a-zA-Z]/g, "").toUpperCase();
-  if (cleaned.length !== 6) return null;
-  return { base: cleaned.slice(0, 3), quote: cleaned.slice(3, 6), key: cleaned };
-}
-
-function parsePairs(q: MarketPricesQuery): CurrencyPair[] | null {
-  const results: CurrencyPair[] = [];
-  if (q.pairs) {
-    const tokens = q.pairs.split(",");
-    for (const t of tokens) {
-      const p = normalizePairToken(t);
-      if (!p) return null;
-      results.push(p);
-    }
-    return results;
-  }
-  if (q.base && q.quote) {
-    const bases = q.base.split(",");
-    const quotes = q.quote.split(",");
-    if (quotes.length !== bases.length) return null;
-    for (let i = 0; i < bases.length; i++) {
-      const p = normalizePairToken(`${bases[i]}${quotes[i]}`);
-      if (!p) return null;
-      results.push(p);
-    }
-    return results;
-  }
-  return null;
-}
-
 function clampInt(val: string | undefined, def: number, min: number, max: number): number {
   const n = parseInt(val ?? "", 10);
-  if (Number.isFinite(n)) {
-    return Math.max(min, Math.min(max, n));
-  }
+  if (Number.isFinite(n)) return Math.max(min, Math.min(max, n));
   return def;
 }
 
-// ---- Providers ----
-const ALPHA_KEY = Deno.env.get("ALPHA_VANTAGE_API_KEY");
+function pickPackages(q: PackageQuery): string[] {
+  const names = (q.packages || "corporate_retreat").split(",").map((s) => s.trim()).filter(Boolean);
+  return Array.from(new Set(names));
+}
 
-async function fetchLatestAlpha(base: string, quote: string) {
-  const url = new URL("https://www.alphavantage.co/query");
-  url.searchParams.set("function", "CURRENCY_EXCHANGE_RATE");
-  url.searchParams.set("from_currency", base);
-  url.searchParams.set("to_currency", quote);
-  url.searchParams.set("apikey", ALPHA_KEY || "");
+function pickCategories(pkgName: string, q: PackageQuery): string[] {
+  if (q.categories) {
+    return q.categories.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  const recipe = PACKAGE_RECIPES[pkgName];
+  return recipe?.categories || [];
+}
+
+function normalizeCurrency(cur?: string | null): string {
+  return (cur || "ZAR").toUpperCase();
+}
+
+// Simple VAT calculation (South Africa default 15%)
+const DEFAULT_VAT_RATE = 0.15;
+
+// Simple FX conversion via exchangerate.host (free). Only used if currency != ZAR.
+async function convertAmount(amountZAR: number, target: string): Promise<{ amount: number; rate: number }>
+{
+  const tgt = target.toUpperCase();
+  if (tgt === "ZAR") return { amount: amountZAR, rate: 1 };
+  const url = new URL("https://api.exchangerate.host/convert");
+  url.searchParams.set("from", "ZAR");
+  url.searchParams.set("to", tgt);
+  url.searchParams.set("amount", String(amountZAR));
   const res = await fetch(url.toString());
   const json = await res.json();
-  const data = json["Realtime Currency Exchange Rate"]; // per API spec
-  if (!data) throw new Error(json?.Note || json?.Information || "Alpha Vantage realtime response malformed");
-  const price = parseFloat(data["5. Exchange Rate"]);
-  const ts = data["6. Last Refreshed"];
-  if (!Number.isFinite(price)) throw new Error("Alpha Vantage realtime price missing");
-  return { price, timestamp: ts };
+  if (!json?.success) throw new Error("FX conversion failed");
+  return { amount: json.result as number, rate: json.info?.rate as number };
 }
 
-async function fetchHistoryAlpha(base: string, quote: string, granularity: "daily" | "intraday", interval: "5min" | "15min" | "60min", limit: number, start?: string, end?: string) {
-  const url = new URL("https://www.alphavantage.co/query");
-  if (granularity === "daily") {
-    url.searchParams.set("function", "FX_DAILY");
-  } else {
-    url.searchParams.set("function", "FX_INTRADAY");
-    url.searchParams.set("interval", interval);
-  }
-  url.searchParams.set("from_symbol", base);
-  url.searchParams.set("to_symbol", quote);
-  url.searchParams.set("apikey", ALPHA_KEY || "");
-  // compact ~ 100 points; full is large - let limit control later
-  url.searchParams.set("outputsize", "full");
-
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  if (!res.ok || json?.Note || json?.Information || json?."Error Message") {
-    const msg = json?.Note || json?.Information || json?.["Error Message"] || "Alpha Vantage time series error";
-    throw new Error(msg);
-  }
-
-  let seriesKey = "";
-  if (granularity === "daily") {
-    seriesKey = "Time Series FX (Daily)";
-  } else {
-    seriesKey = `Time Series FX (${interval})`;
-  }
-  const series = json[seriesKey];
-  if (!series) throw new Error("Alpha Vantage time series missing");
-
-  // Convert to array and filter by optional start/end
-  const points = Object.entries(series).map(([ts, v]: [string, any]) => ({
-    timestamp: ts,
-    open: parseFloat(v["1. open"]),
-    high: parseFloat(v["2. high"]),
-    low: parseFloat(v["3. low"]),
-    close: parseFloat(v["4. close"]),
-  }))
-  .filter((p) => {
-    if (start && p.timestamp < start) return false;
-    if (end && p.timestamp > end) return false;
-    return true;
-  })
-  // sort ascending by time
-  .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-
-  // apply limit from the end (most recent)
-  const sliced = limit > 0 ? points.slice(Math.max(0, points.length - limit)) : points;
-  return sliced;
+// Given a set of catalog rows for one category, compute a representative unit price
+function computeCategoryUnitPrice(rows: CatalogRow[]): number | null {
+  const prices = rows.map((r) => r.avg_price).filter((v) => typeof v === "number" && Number.isFinite(v));
+  if (prices.length === 0) return null;
+  // median to reduce outlier impact
+  const sorted = prices.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-async function fetchLatestExchangerateHost(pairs: CurrencyPair[]) {
-  // Group by base to minimize calls
-  const byBase: Record<string, string[]> = {};
-  for (const { base, quote } of pairs) {
-    (byBase[base] ||= []).push(quote);
+// Estimate cost for a category based on pricing model and usage assumptions
+function estimateCategoryCost(
+  category: string,
+  rows: CatalogRow[],
+  params: { groupSize: number; nights: number; occupancy: number; mealsPerDay: number; hoursPerDay: number }
+) {
+  const unitPrice = computeCategoryUnitPrice(rows);
+  if (!unitPrice) {
+    return { category, unit_price: null as number | null, estimated_total: 0, pricing_hint: "no_data" };
   }
-  const out: Record<string, { price: number; timestamp: string }> = {};
-  await Promise.all(Object.entries(byBase).map(async ([base, quotes]) => {
-    const url = new URL("https://api.exchangerate.host/latest");
-    url.searchParams.set("base", base);
-    url.searchParams.set("symbols", quotes.join(","));
-    const res = await fetch(url.toString());
-    const json = await res.json();
-    if (!json?.success) throw new Error("exchangerate.host latest error");
-    const ts = json?.date; // YYYY-MM-DD
-    for (const q of quotes) {
-      const price = json?.rates?.[q];
-      if (typeof price === "number") {
-        out[`${base}${q}`] = { price, timestamp: ts };
-      }
-    }
-  }));
-  return out;
+
+  // prefer the most common pricing_model in this category
+  const freq: Record<string, number> = {};
+  for (const r of rows) freq[r.pricing_model] = (freq[r.pricing_model] || 0) + 1;
+  const model = Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+
+  const { groupSize, nights, occupancy, mealsPerDay, hoursPerDay } = params;
+
+  let total = 0;
+  switch (model) {
+    case "per_person":
+      // activities/meals often per person; meals likely per person per day
+      if (category === "meals") total = unitPrice * groupSize * nights * mealsPerDay;
+      else total = unitPrice * groupSize; // single activity/session default
+      break;
+    case "daily":
+      if (category === "accommodation") total = unitPrice * nights * Math.ceil(groupSize / Math.max(1, occupancy));
+      else total = unitPrice * Math.max(1, nights);
+      break;
+    case "hourly":
+      total = unitPrice * hoursPerDay * Math.max(1, nights);
+      break;
+    case "per_event":
+    case "fixed":
+    default:
+      total = unitPrice; // base per-event estimate
+      break;
+  }
+
+  return { category, unit_price: unitPrice, estimated_total: Math.max(0, Math.round(total)), pricing_hint: model };
 }
 
-async function fetchHistoryExchangerateHost(base: string, quote: string, start: string, end: string, limit: number) {
-  const url = new URL("https://api.exchangerate.host/timeseries");
-  url.searchParams.set("base", base);
-  url.searchParams.set("symbols", quote);
-  url.searchParams.set("start_date", start);
-  url.searchParams.set("end_date", end);
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  if (!json?.success) throw new Error("exchangerate.host timeseries error");
-  const rates = json?.rates ?? {};
-  const points = Object.entries(rates).map(([date, obj]: [string, any]) => ({
-    timestamp: date,
-    close: obj?.[quote] as number,
-  })).sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-  const sliced = limit > 0 ? points.slice(Math.max(0, points.length - limit)) : points;
-  return sliced;
+async function fetchCatalogByCategories(supabaseAdmin: any, categories: string[]) {
+  const { data, error } = await supabaseAdmin
+    .from("service_catalog")
+    .select("service_category,avg_price,pricing_model,currency")
+    .in("service_category", categories);
+  if (error) throw error;
+  const rows = (data || []) as CatalogRow[];
+  const byCat: Record<string, CatalogRow[]> = {};
+  for (const r of rows) {
+    (byCat[r.service_category] ||= []).push(r);
+  }
+  return byCat;
 }
 
-// ---- Handler ----
+async function buildHistoryFromQuotations(
+  supabaseAdmin: any,
+  categories: string[],
+  start: string,
+  end: string
+) {
+  // Use quotation_requests as proxy for market price over time
+  // Filter by overlap with selected_services categories
+  let query = supabaseAdmin
+    .from("quotation_requests")
+    .select("created_at,total_amount,selected_services,currency,status")
+    .gte("created_at", start)
+    .lte("created_at", end);
+
+  // Not all rows have selected_services; where present, filter for overlap
+  if (categories.length > 0) {
+    // PostgREST overlap operator via supabase-js: .overlaps
+    query = query.overlaps("selected_services", categories as any);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  type Point = { date: string; totals: number[] };
+  const map: Record<string, Point> = {};
+  for (const row of data || []) {
+    const date = new Date(row.created_at).toISOString().slice(0, 10);
+    const amt = typeof row.total_amount === "number" ? row.total_amount : 0;
+    if (!map[date]) map[date] = { date, totals: [] };
+    if (amt > 0) map[date].totals.push(amt);
+  }
+
+  const points = Object.values(map)
+    .map((p) => ({ date: p.date, avg_total: p.totals.length ? Math.round(p.totals.reduce((a, b) => a + b, 0) / p.totals.length) : 0 }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  return points;
+}
+
+// ------------------ HTTP handler ------------------
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -202,99 +216,111 @@ serve(async (req) => {
       return badRequest("Only GET is supported. Use query parameters.");
     }
 
+    // Auth: required (verify_jwt = true in config)
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return httpJson({ error: "Authorization header required" }, { status: 401 });
+
+    // Supabase admin client for secure reads/aggregations
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    );
+
     const url = new URL(req.url);
-    const q: MarketPricesQuery = Object.fromEntries(url.searchParams.entries()) as any;
+    const q = Object.fromEntries(url.searchParams.entries()) as PackageQuery;
 
-    // defaults
-    const granularity = (q.granularity || "real_time") as MarketPricesQuery["granularity"];
-    const interval = (q.interval || "60min") as Required<MarketPricesQuery>["interval"];
-    const include = (q.include || "both") as Required<MarketPricesQuery>["include"];
-    const limit = clampInt(q.limit, 100, 1, 5000);
+    // Defaults and params
+    const packages = pickPackages(q);
+    const groupSize = clampInt(q.group_size, 25, 1, 10000);
+    const nights = clampInt(q.nights, 3, 1, 90);
+    const occupancy = clampInt(q.occupancy, 2, 1, 6);
+    const mealsPerDay = clampInt(q.meals_per_day, 2, 0, 5);
+    const hoursPerDay = clampInt(q.hours_per_day, 8, 1, 16);
+    const targetCurrency = normalizeCurrency(q.currency);
+    const include = (q.include || "both") as NonNullable<PackageQuery["include"]>;
 
-    const pairs = parsePairs(q);
-    if (!pairs || pairs.length === 0) {
-      return badRequest("Provide currency pairs via pairs=USDZAR,EURUSD or base=USD&quote=ZAR");
-    }
-
-    // dates
     const today = new Date().toISOString().slice(0, 10);
-    const days = clampInt(q.days, 30, 1, 3650);
+    const days = clampInt(q.days, 90, 1, 3650);
     const start = q.start || new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
     const end = q.end || today;
 
-    // provider selection
-    const requestedProvider = q.provider;
-    const useAlpha = (requestedProvider === "alpha" || (!requestedProvider && !!ALPHA_KEY)) && !!ALPHA_KEY;
-    const providerName = useAlpha ? "alpha_vantage" : "exchangerate_host";
-
-    // assemble results per pair
+    // For each package, compute a market price estimate
     const results: Record<string, any> = {};
 
-    if (useAlpha) {
-      // Alpha Vantage path
-      await Promise.all(pairs.map(async (p) => {
-        const entry: any = { pair: p, provider: providerName };
-        if (include === "latest" || include === "both") {
-          try {
-            entry.latest = await fetchLatestAlpha(p.base, p.quote);
-          } catch (e: any) {
-            entry.latest_error = e?.message || String(e);
-          }
-        }
-        if (include === "history" || include === "both") {
-          try {
-            const histGran = granularity === "real_time" ? "daily" : granularity; // if real_time requested, still return daily history
-            entry.history = await fetchHistoryAlpha(p.base, p.quote, histGran as any, interval, limit, start, end);
-          } catch (e: any) {
-            entry.history_error = e?.message || String(e);
-          }
-        }
-        results[p.key] = entry;
-      }));
-    } else {
-      // exchangerate.host path (daily only). We'll emulate latest + daily history.
-      if (include === "latest" || include === "both") {
-        const latestMap = await fetchLatestExchangerateHost(pairs);
-        for (const p of pairs) {
-          results[p.key] = { pair: p, provider: providerName, latest: latestMap[p.key] };
-        }
-      } else {
-        for (const p of pairs) {
-          results[p.key] = { pair: p, provider: providerName };
+    for (const pkgName of packages) {
+      const categories = pickCategories(pkgName, q);
+      if (categories.length === 0) {
+        results[pkgName] = { error: `No categories found for package '${pkgName}'. Provide categories=... or use a known package.` };
+        continue;
+      }
+
+      // Fetch catalog data
+      const byCat = await fetchCatalogByCategories(supabaseAdmin, categories);
+
+      // Estimate components
+      const components = categories.map((cat) =>
+        estimateCategoryCost(cat, byCat[cat] || [], { groupSize, nights, occupancy, mealsPerDay, hoursPerDay })
+      );
+
+      // Subtotal in ZAR (catalog typically in ZAR). If catalog rows specify other currency, this is an estimate.
+      const subtotalZAR = components.reduce((sum, c) => sum + (c?.estimated_total || 0), 0);
+      const vatZAR = Math.round(subtotalZAR * DEFAULT_VAT_RATE);
+      const totalZAR = subtotalZAR + vatZAR;
+
+      let currency = "ZAR";
+      let subtotal = subtotalZAR;
+      let vat = vatZAR;
+      let total = totalZAR;
+      let fxRate: number | null = null;
+
+      if (targetCurrency !== "ZAR") {
+        try {
+          const conv = await convertAmount(totalZAR, targetCurrency);
+          fxRate = conv.rate;
+          currency = targetCurrency;
+          total = Math.round(conv.amount);
+          subtotal = Math.round(total / (1 + DEFAULT_VAT_RATE));
+          vat = total - subtotal;
+        } catch (e) {
+          // keep ZAR if FX fails
+          currency = "ZAR";
         }
       }
+
+      const pkgResult: any = {
+        package: pkgName,
+        currency,
+        fx_rate_from_ZAR: fxRate,
+        assumptions: { group_size: groupSize, nights, occupancy, meals_per_day: mealsPerDay, hours_per_day: hoursPerDay },
+        breakdown: components,
+        totals: { subtotal, vat, total, vat_rate: DEFAULT_VAT_RATE },
+      };
+
       if (include === "history" || include === "both") {
-        await Promise.all(pairs.map(async (p) => {
-          try {
-            // only daily available; respect limit and start/end
-            const hist = await fetchHistoryExchangerateHost(p.base, p.quote, start, end, limit);
-            results[p.key].history = hist;
-            if (!results[p.key].latest && hist.length > 0) {
-              const last = hist[hist.length - 1];
-              results[p.key].latest = { price: last.close, timestamp: last.timestamp };
-            }
-          } catch (e: any) {
-            results[p.key].history_error = e?.message || String(e);
-          }
-        }));
+        try {
+          const historyPoints = await buildHistoryFromQuotations(supabaseAdmin, categories, start, end);
+          pkgResult.history = historyPoints;
+        } catch (e: any) {
+          pkgResult.history_error = e?.message || String(e);
+        }
       }
+
+      results[pkgName] = pkgResult;
     }
 
     return httpJson({
-      provider: providerName,
-      granularity,
-      interval: granularity === "intraday" ? interval : undefined,
+      domain: "experiential_travel_education",
       requested: {
-        pairs: pairs.map((p) => ({ base: p.base, quote: p.quote })),
+        packages,
         start,
         end,
         include,
-        limit,
+        currency: targetCurrency,
       },
       data: results,
     }, { status: 200 });
   } catch (error: any) {
-    console.error("market-prices error:", error);
-    return providerError(error?.message || "Unexpected error", 502);
+    console.error("market-prices (packages) error:", error);
+    return httpJson({ error: error?.message || "Unexpected error" }, { status: 502 });
   }
 });
