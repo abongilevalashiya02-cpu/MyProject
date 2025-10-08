@@ -89,3 +89,6 @@ verify_jwt = false
 
 [functions.market-prices]
 verify_jwt = true
+
+[functions.fx-rates]
+verify_jwt = true
