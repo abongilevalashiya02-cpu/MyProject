@@ -140,14 +140,15 @@ const SignupForm: React.FC<SignupFormProps> = ({ setActiveTab }) => {
     
     try {
       const result = await retry(performSignup);
-      
+
       authLogger.info('Signup successful', result);
       setShowEmailInfo(true);
       setRegistrationSuccess(true);
-      
-      // Check if email confirmation is needed
+
+      // result here is the "data" object returned from signUp (not the full response)
+      // It contains: user, session, and our custom needsEmailConfirmation flag
       const signupResult = result as any;
-      const needsConfirmation = signupResult?.data?.needsEmailConfirmation;
+      const needsConfirmation = signupResult?.needsEmailConfirmation ?? !signupResult?.session;
       
       if (needsConfirmation) {
         toast({

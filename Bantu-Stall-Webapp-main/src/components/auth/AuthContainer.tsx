@@ -25,11 +25,14 @@ const AuthContainer: React.FC = () => {
     }
   }, [user, navigate]);
 
-  // Set the active tab based on URL query param if present
+  // Set the active tab based on path and URL query param if present
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
-    if (tab === 'signup') {
+    // If on /signup route, default to signup tab
+    if (location.pathname === '/signup') {
+      setActiveTab('signup');
+    } else if (tab === 'signup') {
       setActiveTab('signup');
     }
     

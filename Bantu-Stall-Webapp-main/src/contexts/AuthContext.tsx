@@ -170,7 +170,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error, data: null };
     }
     
-    const redirectUrl = `${window.location.origin}/`;
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirect = searchParams.get('redirect') || '/';
+    const redirectUrl = `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`;
     
     try {
       const response = await supabase.auth.signUp({
