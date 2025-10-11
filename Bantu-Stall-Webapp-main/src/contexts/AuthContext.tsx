@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { SupabaseClient, User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase as supabaseClient } from '@/integrations/supabase/client';
 import { authLogger } from '@/utils/logger';
+import { appConfig } from '@/config/environment';
 
 interface AuthResponse {
   error: AuthError | Error | null;
@@ -227,7 +228,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const lower = (errorMessage || '').toLowerCase();
         if (lower.includes('network') || lower.includes('fetch') || lower.includes('timeout')) {
           try {
-            const ef = await fetch(`${window.location.origin.replace(/\/$/, '')}/functions/v1/auth-signup`, {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+            const ef = await fetch(`${appConfig.api.baseUrl}/auth-signup`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -236,7 +239,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 metadata: metadata || {},
                 redirectUrl,
               }),
+              signal: controller.signal,
             });
+            clearTimeout(timeout);
             if (ef.ok) {
               const efData = await ef.json();
               return {

@@ -146,6 +146,10 @@ const SignupForm: React.FC<SignupFormProps> = ({ setActiveTab }) => {
       // result here is the "data" object returned from signUp (not the full response)
       // It contains: user, session, and our custom needsEmailConfirmation flag
       const signupResult = result as any;
+      // If Edge Function handled creation, show the action link if present to avoid silent failures
+      if (signupResult?.edgeFunction && signupResult?.action_link) {
+        authLogger.info('Edge function user creation completed');
+      }
       const needsConfirmation = signupResult?.needsEmailConfirmation ?? !signupResult?.session;
       
       if (needsConfirmation) {
