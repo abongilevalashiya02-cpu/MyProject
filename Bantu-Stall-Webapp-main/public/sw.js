@@ -19,13 +19,19 @@ self.addEventListener('install', (event) => {
 
 // Fetch event - serve from cache when offline
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  // Do not interfere with cross-origin requests (e.g., Supabase)
+  if (url.origin !== self.location.origin) {
+    return; // Let the request pass through to the network
+  }
+
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
         // Return cached version or fetch from network
         return response || fetch(event.request);
-      }
-    )
+      })
+      .catch(() => fetch(event.request))
   );
 });
 
