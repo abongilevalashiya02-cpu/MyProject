@@ -223,6 +223,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         
         authLogger.error('Processed signup error', processedError);
+        // Fallback: attempt Edge Function signup if network/auth error occurs
+        const lower = (errorMessage || '').toLowerCase();
+        if (lower.includes('network') || lower.includes('fetch') || lower.includes('timeout')) {
+          try {
+            const ef = await fetch(`${window.location.origin.replace(/\/$/, '')}/functions/v1/auth-signup`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: email.trim().toLowerCase(),
+                password,
+                metadata: metadata || {},
+                redirectUrl,
+              }),
+            });
+            if (ef.ok) {
+              const efData = await ef.json();
+              return {
+                error: null,
+                data: {
+                  user: null,
+                  session: null,
+                  needsEmailConfirmation: true,
+                  message: 'Account created! Please check your email to confirm your account before signing in.',
+                  edgeFunction: true,
+                  action_link: efData?.action_link,
+                }
+              };
+            }
+          } catch (fallbackErr) {
+            authLogger.error('Edge Function signup fallback failed', fallbackErr);
+          }
+        }
         return { error: processedError, data: response.data };
       }
       
