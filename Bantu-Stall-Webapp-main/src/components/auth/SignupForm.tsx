@@ -111,11 +111,9 @@ const SignupForm: React.FC<SignupFormProps> = ({ setActiveTab }) => {
   const onSubmit = async (data: SignupFormValues) => {
     if (!isOnline) {
       toast({
-        title: "No internet connection",
-        description: "Please check your internet connection and try again.",
-        variant: "destructive",
+        title: "Connection issue detected",
+        description: "We couldn't confirm your connection, attempting signup anyway...",
       });
-      return;
     }
 
     const performSignup = async () => {
@@ -140,26 +138,31 @@ const SignupForm: React.FC<SignupFormProps> = ({ setActiveTab }) => {
     
     try {
       const result = await retry(performSignup);
-      
+
       authLogger.info('Signup successful', result);
       setShowEmailInfo(true);
       setRegistrationSuccess(true);
-      
-      // Check if email confirmation is needed
+
+      // result here is the "data" object returned from signUp (not the full response)
+      // It contains: user, session, and our custom needsEmailConfirmation flag
       const signupResult = result as any;
-      const needsConfirmation = signupResult?.data?.needsEmailConfirmation;
+      // If Edge Function handled creation, show the action link if present to avoid silent failures
+      if (signupResult?.edgeFunction && signupResult?.action_link) {
+        authLogger.info('Edge function user creation completed');
+      }
+      const needsConfirmation = signupResult?.needsEmailConfirmation ?? !signupResult?.session;
       
       if (needsConfirmation) {
         toast({
           title: "Account created successfully!",
           description: "Please check your email to confirm your account before signing in.",
-          duration: 6000,
+          duration: 2500,
         });
-        
-        // Don't auto-navigate if confirmation is needed
+
+        // Navigate to dedicated login route for clarity
         setTimeout(() => {
-          setActiveTab('login'); // Switch to login tab instead
-        }, 3000);
+          navigate('/login?tab=login&needs_confirmation=true');
+        }, 1500);
       } else {
         toast({
           title: "Welcome to Bantu!",
@@ -386,7 +389,7 @@ const SignupForm: React.FC<SignupFormProps> = ({ setActiveTab }) => {
           <Button
             type="submit"
             className="w-full bg-gradient-to-r from-bantu-orange to-orange-600 hover:from-orange-600 hover:to-bantu-orange text-white rounded-xl py-3 h-12 font-semibold shadow-lg transition-all duration-200"
-            disabled={isLoading || !isOnline}
+            disabled={isLoading}
           >
             {isLoading || isRetrying ? (
               <>

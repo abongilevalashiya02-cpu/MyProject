@@ -13,6 +13,7 @@ import { Shield, Users, Globe } from 'lucide-react';
 const AuthContainer: React.FC = () => {
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<string>('login');
+  const [tabInitialized, setTabInitialized] = useState(false);
   const [showResetForm, setShowResetForm] = useState(false);
   const { signIn, user } = useAuth();
   const { toast } = useToast();
@@ -25,14 +26,18 @@ const AuthContainer: React.FC = () => {
     }
   }, [user, navigate]);
 
-  // Set the active tab based on URL query param if present
+  // Set the active tab based on path and URL query param if present (run once per location change)
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
-    if (tab === 'signup') {
-      setActiveTab('signup');
+    const needsConfirmation = params.get('needs_confirmation') === 'true';
+    if (!tabInitialized) {
+      if (location.pathname === '/signup' || tab === 'signup') {
+        setActiveTab('signup');
+      }
+      setTabInitialized(true);
     }
-    
+
     // Check for confirmed parameter after email verification
     const confirmed = params.get('confirmed');
     if (confirmed === 'true') {
@@ -41,7 +46,12 @@ const AuthContainer: React.FC = () => {
         description: "Your email has been confirmed. You can now log in.",
       });
     }
-  }, [location, toast]);
+
+    // If redirected from signup needing confirmation, ensure login tab is shown
+    if (needsConfirmation) {
+      setActiveTab('login');
+    }
+  }, [location, toast, tabInitialized]);
 
 
   return (

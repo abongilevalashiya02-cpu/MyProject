@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { SupabaseClient, User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase as supabaseClient } from '@/integrations/supabase/client';
 import { authLogger } from '@/utils/logger';
+import { appConfig } from '@/config/environment';
 
 interface AuthResponse {
   error: AuthError | Error | null;
@@ -170,7 +171,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error, data: null };
     }
     
-    const redirectUrl = `${window.location.origin}/`;
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirect = searchParams.get('redirect') || '/';
+    const redirectUrl = `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`;
     
     try {
       const response = await supabase.auth.signUp({
@@ -221,6 +224,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         
         authLogger.error('Processed signup error', processedError);
+        // Fallback: attempt Edge Function signup if network/auth error occurs
+        const lower = (errorMessage || '').toLowerCase();
+        if (lower.includes('network') || lower.includes('fetch') || lower.includes('timeout')) {
+          try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+            const ef = await fetch(`${appConfig.api.baseUrl}/auth-signup`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: email.trim().toLowerCase(),
+                password,
+                metadata: metadata || {},
+                redirectUrl,
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            if (ef.ok) {
+              const efData = await ef.json();
+              return {
+                error: null,
+                data: {
+                  user: null,
+                  session: null,
+                  needsEmailConfirmation: true,
+                  message: 'Account created! Please check your email to confirm your account before signing in.',
+                  edgeFunction: true,
+                  action_link: efData?.action_link,
+                }
+              };
+            }
+          } catch (fallbackErr) {
+            authLogger.error('Edge Function signup fallback failed', fallbackErr);
+          }
+        }
         return { error: processedError, data: response.data };
       }
       

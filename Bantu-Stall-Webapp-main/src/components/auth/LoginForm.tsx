@@ -71,11 +71,9 @@ const LoginForm: React.FC<LoginFormProps> = ({ setActiveTab, onForgotPassword })
   const onSubmit = async (data: LoginFormValues) => {
     if (!isOnline) {
       toast({
-        title: "No internet connection",
-        description: "Please check your internet connection and try again.",
-        variant: "destructive",
+        title: "Connection issue detected",
+        description: "We couldn't confirm your connection, attempting sign-in anyway...",
       });
-      return;
     }
 
     const performLogin = async () => {
@@ -239,7 +237,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ setActiveTab, onForgotPassword })
           <Button
             type="submit"
             className="w-full bg-gradient-to-r from-bantu-orange to-orange-600 hover:from-orange-600 hover:to-bantu-orange text-white rounded-xl py-3 h-12 font-semibold shadow-lg transition-all duration-200"
-            disabled={isLoading || !isOnline}
+            disabled={isLoading}
           >
             {isLoading || isRetrying ? (
               <>
