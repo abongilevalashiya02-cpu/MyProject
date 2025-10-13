@@ -72,7 +72,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // Generate confirmation link for the user
-    const callback = redirectUrl || `${supabaseUrl.replace("https://wnicvdcjbweavqdffnxp.supabase.co", "https://bantustall.site")}/auth/callback?redirect=/`;
+    const publicSiteUrl = Deno.env.get("PUBLIC_SITE_URL") || "https://bantustall.com";
+    const callback = redirectUrl || `${publicSiteUrl.replace(/\/$/, '')}/auth/callback?redirect=/`;
 
     const { data: linkData, error: linkError } = await (supabaseAdmin as any).auth.admin.generateLink({
       type: "signup",
@@ -99,7 +100,7 @@ serve(async (req: Request): Promise<Response> => {
       if (resendApiKey && actionLink) {
         const resend = new Resend(resendApiKey);
         await resend.emails.send({
-          from: "Bantu Stall <welcome@bantustall.site>",
+          from: "Bantu Stall <welcome@bantustall.com>",
           to: [email],
           subject: "Confirm your Bantu Stall account",
           html: `
